@@ -1295,23 +1295,23 @@ export default class GameScene extends Phaser.Scene {
     );
     overlay.setOrigin(0, 0);
 
-    // Contenedor
+    // Contenedor (aumentado para más texto)
     const bg = this.add.rectangle(
       centerX, centerY,
-      700, 650,
+      750, 750,
       0x1a1a2e
     );
     bg.setStrokeStyle(5, 0x4ecca3);
 
     // Título
-    const title = this.add.text(centerX, centerY - 280, '🎴 FRENZY JOKER 🎴', {
+    const title = this.add.text(centerX, centerY - 330, '🎴 FRENZY JOKER 🎴', {
       fontSize: '48px',
       fill: '#e94560',
       fontStyle: 'bold'
     }).setOrigin(0.5);
 
     // Subtítulo
-    const subtitle = this.add.text(centerX, centerY - 230, 'Cómo Jugar', {
+    const subtitle = this.add.text(centerX, centerY - 270, 'Cómo Jugar', {
       fontSize: '28px',
       fill: '#ffd700',
       fontStyle: 'bold'
@@ -1319,55 +1319,75 @@ export default class GameScene extends Phaser.Scene {
 
     // Separador
     const separator1 = this.add.rectangle(
-      centerX, centerY - 200,
-      650, 2,
+      centerX, centerY - 235,
+      700, 2,
       0x4ecca3
     );
 
+    // Determinar objetivos según dificultad
+    const difficultyLabels = {
+      easy: 'Fácil',
+      normal: 'Normal',
+      hard: 'Difícil'
+    };
+
+    const difficultyLabel = difficultyLabels[this.selectedDifficulty] || 'Normal';
+
+    // Obtener objetivos de las primeras 5 rondas para mostrar
+    const round1 = calculateRoundObjective(1, this.selectedDifficulty);
+    const round2 = calculateRoundObjective(2, this.selectedDifficulty);
+    const round3 = calculateRoundObjective(3, this.selectedDifficulty);
+    const round4 = calculateRoundObjective(4, this.selectedDifficulty);
+    const round5 = calculateRoundObjective(5, this.selectedDifficulty);
+    const round10 = calculateRoundObjective(10, this.selectedDifficulty);
+
     // Instrucciones
     const instructions = [
-      '🎯 OBJETIVO: Completa las 5 rondas',
+      `🎯 OBJETIVO: Completa las 10 rondas (Dificultad: ${difficultyLabel})`,
       '',
-      '📊 Objetivos por ronda:',
-      '   • Ronda 1: 300 puntos',
-      '   • Ronda 2: 450 puntos',
-      '   • Ronda 3: 600 puntos',
-      '   • Ronda 4: 900 puntos',
-      '   • Ronda 5: 1250 puntos',
+      '📊 Ejemplos de objetivos:',
+      `   • Ronda 1: ${round1} puntos`,
+      `   • Ronda 2: ${round2} puntos`,
+      `   • Ronda 3: ${round3} puntos`,
+      `   • ...`,
+      `   • Ronda 10: ${round10} puntos ¡VICTORIA!`,
       '',
       '🃏 Cómo jugar:',
       '   • Selecciona hasta 5 cartas',
-      '   • Forma manos de póker',
-      '   • Juega para sumar puntos',
-      '   • Descarta para cambiar cartas',
+      '   • Forma manos de póker para ganar puntos',
+      '   • Usa JUGAR para sumar puntos',
+      '   • Usa DESCARTAR para cambiar cartas',
+      '',
+      '♾️ Modo Infinito: Tras la ronda 10, ¡continúa',
+      '    jugando con objetivos cada vez mayores!',
       '',
       '⚠️ Si se acaban las jugadas sin alcanzar',
       '    el objetivo, ¡PIERDES!'
     ];
 
     const instructionText = this.add.text(
-      centerX - 300, centerY - 165,
+      centerX - 330, centerY - 200,
       instructions.join('\n'),
       {
-        fontSize: '18px',
+        fontSize: '17px',
         fill: '#ffffff',
-        lineSpacing: 5
+        lineSpacing: 4
       }
     );
 
     // Separador inferior
     const separator2 = this.add.rectangle(
-      centerX, centerY + 210,
-      650, 2,
+      centerX, centerY + 260,
+      700, 2,
       0x4ecca3
     );
 
     // Botón comenzar
-    const startBtn = this.add.rectangle(centerX, centerY + 270, 300, 60, 0x4ecca3);
+    const startBtn = this.add.rectangle(centerX, centerY + 320, 300, 60, 0x4ecca3);
     startBtn.setInteractive({ useHandCursor: true });
     startBtn.setStrokeStyle(3, 0xffffff);
 
-    const startText = this.add.text(centerX, centerY + 270, '¡COMENZAR!', {
+    const startText = this.add.text(centerX, centerY + 320, '¡COMENZAR!', {
       fontSize: '24px',
       fill: '#ffffff',
       fontStyle: 'bold'
