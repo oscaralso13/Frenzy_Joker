@@ -339,9 +339,9 @@ export default class GameScene extends Phaser.Scene {
   }
 
   /**
-   * Guarda el estado completo del juego antes de ir a ajustes
+   * Guarda el estado completo del juego en el registry antes de ir a ajustes
    */
-  saveGameState() {
+  saveGameStateToRegistry() {
     const gameState = {
       // Estado de las cartas
       hand: this.hand.map(card => ({ suit: card.suit, number: card.number, selected: card.selected })),

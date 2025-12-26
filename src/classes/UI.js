@@ -1026,8 +1026,8 @@ export default class UI {
     // Ocultar menú
     this.containers.dropdown.setVisible(false);
 
-    // Guardar el estado completo del juego
-    this.scene.saveGameState();
+    // Guardar el estado completo del juego en el registry
+    this.scene.saveGameStateToRegistry();
 
     // Guardar que venimos de GameScene con estado guardado
     this.scene.registry.set('returnToScene', 'GameScene');
