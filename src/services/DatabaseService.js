@@ -22,11 +22,108 @@ const isOnline = () => {
 
 /**
  * Servicio de base de datos con Firestore
+ * Ahora incluye manejo robusto de reconexión y eventos de red
  */
 class DatabaseService {
   constructor() {
     this.usersCollection = 'users';
     this.localCacheKey = 'frenzyJoker_cachedGame';
+    this.isOnlineState = navigator.onLine;
+    this.syncInProgress = false;
+
+    // Configurar listeners de eventos de red
+    this.setupNetworkListeners();
+  }
+
+  /**
+   * Configura listeners para eventos de red (online/offline)
+   * Esto detecta cambios de red y sincroniza automáticamente
+   */
+  setupNetworkListeners() {
+    window.addEventListener('online', () => this.handleOnline());
+    window.addEventListener('offline', () => this.handleOffline());
+
+    // También detectar cambios de visibilidad de la página
+    document.addEventListener('visibilitychange', () => {
+      if (!document.hidden && navigator.onLine) {
+        // Cuando el usuario vuelve a la pestaña, verificar conexión
+        this.handleOnline();
+      }
+    });
+  }
+
+  /**
+   * Maneja el evento cuando la conexión se restaura
+   */
+  async handleOnline() {
+    const wasOffline = !this.isOnlineState;
+    this.isOnlineState = true;
+
+    if (wasOffline) {
+      console.log('✅ Conexión restaurada - Sincronizando datos pendientes...');
+
+      // Sincronizar cache pendiente automáticamente
+      try {
+        await this.syncCachedGame();
+      } catch (error) {
+        console.error('Error al sincronizar después de reconexión:', error);
+      }
+    }
+  }
+
+  /**
+   * Maneja el evento cuando se pierde la conexión
+   */
+  handleOffline() {
+    this.isOnlineState = false;
+    console.log('⚠️ Conexión perdida - Los cambios se guardarán localmente');
+  }
+
+  /**
+   * Ejecuta una operación con reintentos automáticos y backoff exponencial
+   * Útil para operaciones que pueden fallar por problemas de red
+   */
+  async retryWithBackoff(fn, maxRetries = 3, operation = 'operación') {
+    for (let attempt = 0; attempt < maxRetries; attempt++) {
+      try {
+        const result = await fn();
+        return result;
+      } catch (error) {
+        const isLastAttempt = attempt === maxRetries - 1;
+
+        // Si es un error de red y no es el último intento, reintentar
+        if (!isLastAttempt && this.isNetworkError(error)) {
+          const delay = Math.pow(2, attempt) * 1000; // 1s, 2s, 4s
+          console.log(`⚠️ Error de red en ${operation}. Reintentando en ${delay/1000}s... (intento ${attempt + 2}/${maxRetries})`);
+          await new Promise(resolve => setTimeout(resolve, delay));
+          continue;
+        }
+
+        // Si es el último intento o no es un error de red, lanzar error
+        throw error;
+      }
+    }
+  }
+
+  /**
+   * Verifica si un error es de tipo red/conectividad
+   */
+  isNetworkError(error) {
+    if (!error) return false;
+
+    const networkErrorCodes = [
+      'unavailable',
+      'deadline-exceeded',
+      'network-request-failed',
+      'timeout'
+    ];
+
+    const errorCode = error.code?.toLowerCase() || '';
+    const errorMessage = error.message?.toLowerCase() || '';
+
+    return networkErrorCodes.some(code =>
+      errorCode.includes(code) || errorMessage.includes(code)
+    );
   }
 
   /**
@@ -82,17 +179,24 @@ class DatabaseService {
 
   /**
    * Obtiene el perfil del usuario
+   * Ahora con reintentos automáticos
    */
   async getUserProfile(userId) {
     try {
-      const userRef = doc(db, this.usersCollection, userId);
-      const userSnap = await getDoc(userRef);
+      return await this.retryWithBackoff(
+        async () => {
+          const userRef = doc(db, this.usersCollection, userId);
+          const userSnap = await getDoc(userRef);
 
-      if (userSnap.exists()) {
-        return { success: true, data: userSnap.data() };
-      } else {
-        return { success: false, error: 'Usuario no encontrado' };
-      }
+          if (userSnap.exists()) {
+            return { success: true, data: userSnap.data() };
+          } else {
+            return { success: false, error: 'Usuario no encontrado' };
+          }
+        },
+        3,
+        'obtener perfil de usuario'
+      );
     } catch (error) {
       console.error('Error al obtener perfil:', error);
       return { success: false, error: error.message };
@@ -118,84 +222,91 @@ class DatabaseService {
 
   /**
    * Guarda estadísticas de una partida completada
+   * Ahora con reintentos automáticos
    */
   async saveGameStats(userId, gameData) {
     try {
-      const userRef = doc(db, this.usersCollection, userId);
-      const userSnap = await getDoc(userRef);
+      return await this.retryWithBackoff(
+        async () => {
+          const userRef = doc(db, this.usersCollection, userId);
+          const userSnap = await getDoc(userRef);
 
-      if (!userSnap.exists()) {
-        return { success: false, error: 'Usuario no encontrado' };
-      }
+          if (!userSnap.exists()) {
+            return { success: false, error: 'Usuario no encontrado' };
+          }
 
-      const currentData = userSnap.data();
-      const currentStats = currentData.stats || {};
+          const currentData = userSnap.data();
+          const currentStats = currentData.stats || {};
 
-      // Calcular nuevo promedio
-      const newGamesPlayed = (currentStats.gamesPlayed || 0) + 1;
-      const newTotalScore = (currentStats.totalScore || 0) + gameData.finalScore;
-      const newAverageScore = Math.round(newTotalScore / newGamesPlayed);
+          // Calcular nuevo promedio
+          const newGamesPlayed = (currentStats.gamesPlayed || 0) + 1;
+          const newTotalScore = (currentStats.totalScore || 0) + gameData.finalScore;
+          const newAverageScore = Math.round(newTotalScore / newGamesPlayed);
 
-      // Actualizar high score si es necesario
-      const newHighScore = Math.max(
-        currentStats.highScore || 0,
-        gameData.finalScore
+          // Actualizar high score si es necesario
+          const newHighScore = Math.max(
+            currentStats.highScore || 0,
+            gameData.finalScore
+          );
+
+          // Actualizar contador de manos jugadas
+          const updatedBestHands = { ...(currentStats.bestHands || {}) };
+          if (gameData.handsPlayed) {
+            Object.keys(gameData.handsPlayed).forEach(handName => {
+              updatedBestHands[handName] = (updatedBestHands[handName] || 0) + gameData.handsPlayed[handName];
+            });
+          }
+
+          // Preparar objeto de actualización
+          const updateData = {
+            'stats.totalScore': newTotalScore,
+            'stats.highScore': newHighScore,
+            'stats.gamesPlayed': newGamesPlayed,
+            'stats.averageScore': newAverageScore,
+            'stats.totalPlayTime': increment(gameData.playTime || 0),
+            'stats.bestHands': updatedBestHands
+          };
+
+          // Incrementar victorias por dificultad si es victoria
+          if (gameData.isVictory) {
+            // Validar y normalizar dificultad
+            const validDifficulties = ['easy', 'normal', 'hard'];
+            const difficulty = validDifficulties.includes(gameData.difficulty)
+              ? gameData.difficulty
+              : 'normal'; // Fallback a normal si es inválido o undefined
+
+            const difficultyMap = {
+              'easy': 'victoriesEasy',
+              'normal': 'victoriesNormal',
+              'hard': 'victoriesHard'
+            };
+
+            const victoryField = difficultyMap[difficulty];
+            updateData[`stats.${victoryField}`] = increment(1);
+            console.log(`✅ Victoria registrada en dificultad: ${difficulty}`);
+
+            if (gameData.difficulty !== difficulty) {
+              console.warn(`⚠️ Dificultad inválida '${gameData.difficulty}' normalizada a '${difficulty}'`);
+            }
+          }
+
+          // Actualizar documento
+          await updateDoc(userRef, updateData);
+
+          console.log('Estadísticas guardadas exitosamente');
+          return {
+            success: true,
+            data: {
+              totalScore: newTotalScore,
+              highScore: newHighScore,
+              gamesPlayed: newGamesPlayed,
+              averageScore: newAverageScore
+            }
+          };
+        },
+        3,
+        'guardar estadísticas del juego'
       );
-
-      // Actualizar contador de manos jugadas
-      const updatedBestHands = { ...(currentStats.bestHands || {}) };
-      if (gameData.handsPlayed) {
-        Object.keys(gameData.handsPlayed).forEach(handName => {
-          updatedBestHands[handName] = (updatedBestHands[handName] || 0) + gameData.handsPlayed[handName];
-        });
-      }
-
-      // Preparar objeto de actualización
-      const updateData = {
-        'stats.totalScore': newTotalScore,
-        'stats.highScore': newHighScore,
-        'stats.gamesPlayed': newGamesPlayed,
-        'stats.averageScore': newAverageScore,
-        'stats.totalPlayTime': increment(gameData.playTime || 0),
-        'stats.bestHands': updatedBestHands
-      };
-
-      // Incrementar victorias por dificultad si es victoria
-      if (gameData.isVictory) {
-        // Validar y normalizar dificultad
-        const validDifficulties = ['easy', 'normal', 'hard'];
-        const difficulty = validDifficulties.includes(gameData.difficulty)
-          ? gameData.difficulty
-          : 'normal'; // Fallback a normal si es inválido o undefined
-
-        const difficultyMap = {
-          'easy': 'victoriesEasy',
-          'normal': 'victoriesNormal',
-          'hard': 'victoriesHard'
-        };
-
-        const victoryField = difficultyMap[difficulty];
-        updateData[`stats.${victoryField}`] = increment(1);
-        console.log(`✅ Victoria registrada en dificultad: ${difficulty}`);
-
-        if (gameData.difficulty !== difficulty) {
-          console.warn(`⚠️ Dificultad inválida '${gameData.difficulty}' normalizada a '${difficulty}'`);
-        }
-      }
-
-      // Actualizar documento
-      await updateDoc(userRef, updateData);
-
-      console.log('Estadísticas guardadas exitosamente');
-      return {
-        success: true,
-        data: {
-          totalScore: newTotalScore,
-          highScore: newHighScore,
-          gamesPlayed: newGamesPlayed,
-          averageScore: newAverageScore
-        }
-      };
     } catch (error) {
       console.error('Error al guardar estadísticas:', error);
       return { success: false, error: error.message };
@@ -316,6 +427,7 @@ class DatabaseService {
 
   /**
    * Guarda el estado actual de la partida
+   * Ahora con reintentos automáticos y mejor manejo de errores
    */
   async saveGameProgress(userId, gameState) {
     // Verificar conectividad
@@ -331,16 +443,22 @@ class DatabaseService {
     }
 
     try {
-      const userRef = doc(db, this.usersCollection, userId);
+      // Intentar guardar con reintentos automáticos
+      await this.retryWithBackoff(
+        async () => {
+          const userRef = doc(db, this.usersCollection, userId);
+          await updateDoc(userRef, {
+            savedGame: {
+              ...gameState,
+              savedAt: serverTimestamp()
+            }
+          });
+        },
+        3,
+        'guardar progreso del juego'
+      );
 
-      await updateDoc(userRef, {
-        savedGame: {
-          ...gameState,
-          savedAt: serverTimestamp()
-        }
-      });
-
-      console.log('Partida guardada automáticamente');
+      console.log('✅ Partida guardada automáticamente');
 
       // Si había cache pendiente, marcarla como sincronizada
       const cachedData = localStorage.getItem(this.localCacheKey);
@@ -355,10 +473,10 @@ class DatabaseService {
 
       return { success: true, cached: false };
     } catch (error) {
-      console.error('Error al guardar progreso:', error);
+      console.error('❌ Error al guardar progreso después de reintentos:', error);
 
-      // Si falla Firestore, intentar guardar en cache como fallback
-      console.warn('⚠️ Error de Firestore. Guardando en cache como fallback...');
+      // Si falla Firestore después de reintentos, guardar en cache como fallback
+      console.warn('⚠️ Guardando en cache como fallback...');
       const cacheResult = this.saveToLocalCache(userId, gameState);
 
       if (cacheResult.success) {
@@ -476,8 +594,17 @@ class DatabaseService {
 
   /**
    * Sincroniza partida cacheada con Firestore
+   * Ahora con protección contra sincronizaciones concurrentes
    */
   async syncCachedGame() {
+    // Evitar sincronizaciones múltiples simultáneas
+    if (this.syncInProgress) {
+      console.log('⏳ Sincronización ya en progreso, omitiendo...');
+      return { success: false, error: 'sync_in_progress' };
+    }
+
+    this.syncInProgress = true;
+
     try {
       const cachedData = localStorage.getItem(this.localCacheKey);
       if (!cachedData) {
@@ -497,8 +624,23 @@ class DatabaseService {
         return { success: false, error: 'offline' };
       }
 
-      // Intentar sincronizar con Firestore
-      const result = await this.saveGameProgress(cache.userId, cache.gameState);
+      // Intentar sincronizar con Firestore usando reintentos
+      console.log('🔄 Sincronizando cache con Firestore...');
+
+      const result = await this.retryWithBackoff(
+        async () => {
+          const userRef = doc(db, this.usersCollection, cache.userId);
+          await updateDoc(userRef, {
+            savedGame: {
+              ...cache.gameState,
+              savedAt: serverTimestamp()
+            }
+          });
+          return { success: true };
+        },
+        3,
+        'sincronización de cache'
+      );
 
       if (result.success) {
         // Marcar como sincronizado
@@ -512,6 +654,8 @@ class DatabaseService {
     } catch (error) {
       console.error('Error al sincronizar cache:', error);
       return { success: false, error: error.message };
+    } finally {
+      this.syncInProgress = false;
     }
   }
 

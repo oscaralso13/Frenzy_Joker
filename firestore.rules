@@ -22,13 +22,20 @@ service cloud.firestore {
       // ACTUALIZACIÓN: Solo el propio usuario puede actualizar su documento
       allow update: if request.auth != null
         && request.auth.uid == userId
-        // No permitir modificar campos críticos
+        // No permitir modificar campos críticos (userId, email, createdAt)
         && !request.resource.data.diff(resource.data).affectedKeys().hasAny(['userId', 'email', 'createdAt'])
-        // Validar que las estadísticas sean razonables (anti-trampas básico)
-        && request.resource.data.stats.highScore >= 0
-        && request.resource.data.stats.highScore <= 10000 // Límite razonable
-        && request.resource.data.stats.gamesPlayed >= resource.data.stats.gamesPlayed // Solo puede incrementar
-        && request.resource.data.stats.totalScore >= resource.data.stats.totalScore; // Solo puede incrementar
+        // Validaciones anti-trampas solo si se modifican las stats
+        && (
+          // Si NO se modifican las stats, permitir (para lastLogin, savedGame, etc.)
+          !request.resource.data.diff(resource.data).affectedKeys().hasAny(['stats'])
+          // O si se modifican las stats, validar que sean razonables
+          || (
+            request.resource.data.stats.highScore >= 0
+            && request.resource.data.stats.highScore <= 100000 // Límite más alto
+            && request.resource.data.stats.gamesPlayed >= resource.data.stats.gamesPlayed // Solo puede incrementar
+            && request.resource.data.stats.totalScore >= resource.data.stats.totalScore // Solo puede incrementar
+          )
+        );
 
       // ELIMINACIÓN: No permitir eliminar documentos de usuario
       // (en producción podrías crear una Cloud Function para esto)
